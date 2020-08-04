@@ -7,6 +7,7 @@
 #include "opencv2/ocl/ocl.hpp"
 #include "pointDefinition.h"
 
+//OPENCL GPU加速版
 using namespace std;
 using namespace cv;
 using namespace cv::ocl;

@@ -13,6 +13,9 @@
 #include "cameraParameters.h"
 #include "pointDefinition.h"
 
+#include <opencv2/core/eigen.hpp>
+
+using namespace std;
 const double PI = 3.1415926;
 
 pcl::PointCloud<ImagePoint>::Ptr imagePointsCur(new pcl::PointCloud<ImagePoint>());
@@ -21,6 +24,7 @@ pcl::PointCloud<ImagePoint>::Ptr startPointsCur(new pcl::PointCloud<ImagePoint>(
 pcl::PointCloud<ImagePoint>::Ptr startPointsLast(new pcl::PointCloud<ImagePoint>());
 pcl::PointCloud<pcl::PointXYZHSV>::Ptr startTransCur(new pcl::PointCloud<pcl::PointXYZHSV>());
 pcl::PointCloud<pcl::PointXYZHSV>::Ptr startTransLast(new pcl::PointCloud<pcl::PointXYZHSV>());
+// 特征点
 pcl::PointCloud<pcl::PointXYZHSV>::Ptr ipRelations(new pcl::PointCloud<pcl::PointXYZHSV>());
 pcl::PointCloud<pcl::PointXYZHSV>::Ptr ipRelations2(new pcl::PointCloud<pcl::PointXYZHSV>());
 pcl::PointCloud<pcl::PointXYZ>::Ptr imagePointsProj(new pcl::PointCloud<pcl::PointXYZ>());
@@ -126,7 +130,9 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
   imuPitchLast = imuPitchCur;
   imuYawLast = imuYawCur;
 
-  double transform[6] = {0};
+  double transform[6] = {0};// (roll,pitch,yaw,dx,dy,dz)
+
+  // 和loam中一样的imu插值
   if (imuPointerLast >= 0) {
     while (imuPointerFront != imuPointerLast) {
       if (imagePointsCurTime < imuTime[imuPointerFront]) {
@@ -191,9 +197,14 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
   pcl::PointXYZHSV ipr;
   ipRelations->clear();
   ipInd.clear();
-  for (int i = 0; i < imagePointsLastNum; i++) {
+
+  for (int i = 0; i < imagePointsLastNum; i++)
+  {
     bool ipFound = false;
+
+    // 在当前帧的特征点中找到了上一帧相对应的特征点
     for (; j < imagePointsCurNum; j++) {
+        //cout << "i: " << imagePointsLast->points[i].ind << "  " << "j: " << imagePointsCur->points[j].ind << endl;
       if (imagePointsCur->points[j].ind == imagePointsLast->points[i].ind) {
         ipFound = true;
       }
@@ -202,17 +213,21 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
       }
     }
 
-    if (ipFound) {
+    if (ipFound)
+    {
       ipr.x = imagePointsLast->points[i].u;
       ipr.y = imagePointsLast->points[i].v;
       ipr.z = imagePointsCur->points[j].u;
       ipr.h = imagePointsCur->points[j].v;
 
+      // 乘了一个scale*10,特征点位置，用查找最近的三个点关联深度
       ips.x = 10 * ipr.x;
       ips.y = 10 * ipr.y;
       ips.z = 10;
-      
-      if (depthCloudNum > 10) {
+
+      // feature depth Association
+      if (depthCloudNum > 10)
+      {
         kdTree->nearestKSearch(ips, 3, pointSearchInd, pointSearchSqrDis);
 
         double minDepth, maxDepth;
@@ -258,18 +273,24 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
           ipr.s = 0;
           ipr.v = 0;
         }
-      } else {
+      }
+      else
+          {
         ipr.s = 0;
         ipr.v = 0;
       }
 
-      if (fabs(ipr.v) < 0.5) {
+
+      // ipr.v == 0
+      if (fabs(ipr.v) < 0.5) // 没有深度
+      {
+          // debug  一直是0，进不去下面的if>1
         double disX = transformSum[3] - startTransLast->points[i].h;
         double disY = transformSum[4] - startTransLast->points[i].s;
         double disZ = transformSum[5] - startTransLast->points[i].v;
 
-        if (sqrt(disX * disX + disY * disY + disZ * disZ) > 1) {
-
+        if (sqrt(disX * disX + disY * disY + disZ * disZ) > 1)
+        {
           double u0 = startPointsLast->points[i].u;
           double v0 = startPointsLast->points[i].v;
           double u1 = ipr.x;
@@ -296,6 +317,7 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
           double tx1 = -transformSum[3];
           double ty1 = -transformSum[4];
           double tz1 = -transformSum[5];
+
 
           double x1 = crz0 * u0 + srz0 * v0;
           double y1 = -srz0 * u0 + crz0 * v0;
@@ -362,12 +384,16 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
     }
   }
 
+
   int iterNum = 100;
   pcl::PointXYZHSV ipr2, ipr3, ipr4;
   int ipRelationsNum = ipRelations->points.size();
   int ptNumNoDepthRec = 0;
   int ptNumWithDepthRec = 0;
   double meanValueWithDepthRec = 100000;
+
+
+  // ********************非线性优化*********************
   for (int iterCount = 0; iterCount < iterNum; iterCount++) {
     ipRelations2->clear();
     ipy2.clear();
@@ -375,6 +401,7 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
     int ptNumWithDepth = 0;
     double meanValueNoDepth = 0;
     double meanValueWithDepth = 0;
+
     for (int i = 0; i < ipRelationsNum; i++) {
       ipr = ipRelations->points[i];
 
@@ -393,8 +420,8 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
       double ty = transform[4];
       double tz = transform[5];
 
-      if (fabs(ipr.v) < 0.5) {
-
+      if (fabs(ipr.v) < 0.5) // 没有深度
+      {
         ipr2.x = v0*(crz*srx*(tx - tz*u1) - crx*(ty*u1 - tx*v1) + srz*srx*(ty - tz*v1)) 
                - u0*(sry*srx*(ty*u1 - tx*v1) + crz*sry*crx*(tx - tz*u1) + sry*srz*crx*(ty - tz*v1)) 
                + cry*srx*(ty*u1 - tx*v1) + cry*crz*crx*(tx - tz*u1) + cry*srz*crx*(ty - tz*v1);
@@ -438,8 +465,11 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
         } else {
           ipRelations->points[i].v = -1;
         }
-      } else if (fabs(ipr.v - 1) < 0.5 || fabs(ipr.v - 2) < 0.5) {
+      }
 
+      else if (fabs(ipr.v - 1) < 0.5 || fabs(ipr.v - 2) < 0.5)
+      {
+          //std::cout << "vvv" << std::endl;
         double d0 = ipr.s;
 
         ipr3.x = d0*(cry*srz*crx + cry*u1*srx) - d0*u0*(sry*srz*crx + sry*u1*srx) 
@@ -489,13 +519,15 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
         }
       }
     }
+
     meanValueWithDepth /= (ptNumWithDepth + 0.01);
     ptNumNoDepthRec = ptNumNoDepth;
     ptNumWithDepthRec = ptNumWithDepth;
     meanValueWithDepthRec = meanValueWithDepth;
 
     int ipRelations2Num = ipRelations2->points.size();
-    if (ipRelations2Num > 10) {
+    if (ipRelations2Num > 10)
+    {
       cv::Mat matA(ipRelations2Num, 6, CV_32F, cv::Scalar::all(0));
       cv::Mat matAt(6, ipRelations2Num, CV_32F, cv::Scalar::all(0));
       cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0));
@@ -514,20 +546,38 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
         matA.at<float>(i, 5) = ipr2.v;
         matB.at<float>(i, 0) = -0.2 * ipy2[i];
       }
+
+      //std::cout << "*********************" << std::endl;
       cv::transpose(matA, matAt);
       matAtA = matAt * matA;
       matAtB = matAt * matB;
-      cv::solve(matAtA, matAtB, matX, cv::DECOMP_QR);
-
-      //if (fabs(matX.at<float>(0, 0)) < 0.1 && fabs(matX.at<float>(1, 0)) < 0.1 && 
-      //    fabs(matX.at<float>(2, 0)) < 0.1) {
+      //cv::solve(matAtA, matAtB, matX, cv::DECOMP_QR);
+      // torchm
+      Eigen::Matrix<float,6,6> matAtAe;
+      Eigen::Matrix<float,6,1> matAtBe;
+      Eigen::Matrix<float,6,1> matXe;
+        cv2eigen(matAtA,matAtAe);
+        cv2eigen(matAtB,matAtBe);
+        //matXe = matAtAe.ldlt().solve(matAtBe);
+        matXe = matAtAe.colPivHouseholderQr().solve(matAtBe);
+        //matXe = matAtAe.fullPivHouseholderQr().solve(matAtBe);
+        eigen2cv(matXe,matX);
+//        std::cout << "matAtA: " << matAtA << std::endl;
+////        std::cout << matAtAe << std::endl;
+//        std::cout << "matAtB: " << matAtB << std::endl;
+//        std::cout << matAtBe << std::endl;
+//        std::cout << "matX: "<<matX << std::endl;
+//        std::cout << matXe << std::endl;
+//     if (fabs(matX.at<float>(0, 0)) < 0.1 && fabs(matX.at<float>(1, 0)) < 0.1 &&
+//         fabs(matX.at<float>(2, 0)) < 0.1) {
         transform[0] += matX.at<float>(0, 0);
         transform[1] += matX.at<float>(1, 0);
         transform[2] += matX.at<float>(2, 0);
         transform[3] += matX.at<float>(3, 0);
         transform[4] += matX.at<float>(4, 0);
         transform[5] += matX.at<float>(5, 0);
-      //}
+     // }
+
 
       float deltaR = sqrt(matX.at<float>(0, 0) * 180 / PI * matX.at<float>(0, 0) * 180 / PI
                    + matX.at<float>(1, 0) * 180 / PI * matX.at<float>(1, 0) * 180 / PI
@@ -536,6 +586,7 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
                    + matX.at<float>(4, 0) * 100 * matX.at<float>(4, 0) * 100
                    + matX.at<float>(5, 0) * 100 * matX.at<float>(5, 0) * 100);
 
+      // 收敛条件
       if (deltaR < 0.00001 && deltaT < 0.00001) {
         break;
       }
@@ -607,7 +658,8 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
   double sry = sin(transform[1]);
 
   j = 0;
-  for (int i = 0; i < imagePointsCurNum; i++) {
+  for (int i = 0; i < imagePointsCurNum; i++)
+  {
     bool ipFound = false;
     for (; j < imagePointsLastNum; j++) {
       if (imagePointsLast->points[j].ind == imagePointsCur->points[i].ind) {
@@ -618,7 +670,8 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
       }
     }
 
-    if (ipFound) {
+    if (ipFound)
+    {
       startPointsCur->push_back(startPointsLast->points[j]);
       startTransCur->push_back(startTransLast->points[j]);
 
@@ -639,7 +692,8 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
       } else {
         ipDepthCur->push_back(-1);
       }
-    } else {
+    }
+    else {
       startPointsCur->push_back(imagePointsCur->points[i]);
       startTransCur->push_back(spc);
       ipDepthCur->push_back(-1);
@@ -669,6 +723,7 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
   voData.twist.twist.angular.x = angleSum[0];
   voData.twist.twist.angular.y = angleSum[1];
   voData.twist.twist.angular.z = angleSum[2];
+
   voDataPubPointer->publish(voData);
 
   tf::StampedTransform voTrans;
@@ -754,6 +809,7 @@ void imagePointsHandler(const sensor_msgs::PointCloud2ConstPtr& imagePoints2)
 
 void depthCloudHandler(const sensor_msgs::PointCloud2ConstPtr& depthCloud2)
 {
+    cout << "depthCloudNum: " << depthCloudNum << endl;
   depthCloudTime = depthCloud2->header.stamp.toSec();
 
   depthCloud->clear();
@@ -767,7 +823,6 @@ void depthCloudHandler(const sensor_msgs::PointCloud2ConstPtr& depthCloud2)
       depthCloud->points[i].y *= 10 / depthCloud->points[i].z;
       depthCloud->points[i].z = 10;
     }
-
     kdTree->setInputCloud(depthCloud);
   }
 }
@@ -787,12 +842,21 @@ void imuDataHandler(const sensor_msgs::Imu::ConstPtr& imuData)
   imuYaw[imuPointerLast] = yaw;
 }
 
+/*
+ * 图像根据深度显示匹配的特征点
+ * 未融合深度时，所有点都在-1的归一化平面上
+ * 深度0~0.5显示红色 （没有深度信息）
+ * 深度0.5~1.5显示绿色 (深度来自深度图或者激光)
+ * 深度1.5~2.5显示蓝色 (深度来自三角化)
+ * 其他深度显示黑色
+ */
 void imageDataHandler(const sensor_msgs::Image::ConstPtr& imageData) 
 {
   cv_bridge::CvImagePtr bridge = cv_bridge::toCvCopy(imageData, "bgr8");
 
   int ipRelationsNum = ipRelations->points.size();
   for (int i = 0; i < ipRelationsNum; i++) {
+      // 没融合深度，v == -1,都在归一化平面上
     if (fabs(ipRelations->points[i].v) < 0.5) {
       cv::circle(bridge->image, cv::Point((kImage[2] - ipRelations->points[i].z * kImage[0]) / showDSRate,
                 (kImage[5] - ipRelations->points[i].h * kImage[4]) / showDSRate), 1, CV_RGB(255, 0, 0), 2);
@@ -802,7 +866,7 @@ void imageDataHandler(const sensor_msgs::Image::ConstPtr& imageData)
     } else if (fabs(ipRelations->points[i].v - 2) < 0.5) {
       cv::circle(bridge->image, cv::Point((kImage[2] - ipRelations->points[i].z * kImage[0]) / showDSRate,
                 (kImage[5] - ipRelations->points[i].h * kImage[4]) / showDSRate), 1, CV_RGB(0, 0, 255), 2);
-    } /*else {
+    }/*else {
       cv::circle(bridge->image, cv::Point((kImage[2] - ipRelations->points[i].z * kImage[0]) / showDSRate,
                 (kImage[5] - ipRelations->points[i].h * kImage[4]) / showDSRate), 1, CV_RGB(0, 0, 0), 2);
     }*/

@@ -165,7 +165,7 @@ void syncCloudHandler(const sensor_msgs::PointCloud2ConstPtr& syncCloud2)
   surroundCloud->clear();
   pcl::VoxelGrid<pcl::PointXYZ> downSizeFilter;
   downSizeFilter.setInputCloud(tempCloud);
-  downSizeFilter.setLeafSize(0.2, 0.2, 0.2);
+  downSizeFilter.setLeafSize(0.02, 0.02, 0.02);
   downSizeFilter.filter(*surroundCloud);
 
   sensor_msgs::PointCloud2 surroundCloud2;

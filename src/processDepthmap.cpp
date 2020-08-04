@@ -10,7 +10,7 @@
 #include <tf/transform_broadcaster.h>
 
 #include "pointDefinition.h"
-
+using namespace std;
 const double PI = 3.1415926;
 
 const int keepVoDataNum = 30;
@@ -40,6 +40,7 @@ int startCount = -1;
 const int startSkipNum = 5;
 
 ros::Publisher *depthCloudPubPointer = NULL;
+ros::Publisher depthCloudPub;
 
 void voDataHandler(const nav_msgs::Odometry::ConstPtr& voData)
 {
@@ -49,6 +50,7 @@ void voDataHandler(const nav_msgs::Odometry::ConstPtr& voData)
   geometry_msgs::Quaternion geoQuat = voData->pose.pose.orientation;
   tf::Matrix3x3(tf::Quaternion(geoQuat.z, -geoQuat.x, -geoQuat.y, geoQuat.w)).getRPY(roll, pitch, yaw);
 
+  //
   double rx = voData->twist.twist.angular.x - rxRec;
   double ry = voData->twist.twist.angular.y - ryRec;
   double rz = voData->twist.twist.angular.z - rzRec;
@@ -59,6 +61,7 @@ void voDataHandler(const nav_msgs::Odometry::ConstPtr& voData)
     ry -= 2 * PI;
   }
 
+  // 跟前一帧的位置差
   double tx = voData->pose.pose.position.x - txRec;
   double ty = voData->pose.pose.position.y - tyRec;
   double tz = voData->pose.pose.position.z - tzRec;
@@ -71,6 +74,7 @@ void voDataHandler(const nav_msgs::Odometry::ConstPtr& voData)
   tyRec = voData->pose.pose.position.y;
   tzRec = voData->pose.pose.position.z;
 
+  // 跟前一帧的平移差旋转到世界坐标系的方向
   double x1 = cos(yaw) * tx + sin(yaw) * tz;
   double y1 = ty;
   double z1 = -sin(yaw) * tx + cos(yaw) * tz;
@@ -83,6 +87,8 @@ void voDataHandler(const nav_msgs::Odometry::ConstPtr& voData)
   ty = -sin(roll) * x2 + cos(roll) * y2;
   tz = z2;
 
+
+  // 储存跟前一帧的平移和旋转
   voDataInd = (voDataInd + 1) % keepVoDataNum;
   voDataTime[voDataInd] = time;
   voRx[voDataInd] = rx;
@@ -99,12 +105,14 @@ void voDataHandler(const nav_msgs::Odometry::ConstPtr& voData)
   double cosrz = cos(rz);
   double sinrz = sin(rz);
 
-  if (time - timeRec < 0.5) {
+  if (time - timeRec < 0.5)
+  {
     pcl::PointXYZI point;
     tempCloud->clear();
     double x1, y1, z1, x2, y2, z2;
     int depthCloudNum = depthCloud->points.size();
-    for (int i = 0; i < depthCloudNum; i++) {
+    for (int i = 0; i < depthCloudNum; i++)
+    {
       point = depthCloud->points[i];
 
       x1 = cosry * point.x - sinry * point.z;
@@ -165,7 +173,7 @@ void voDataHandler(const nav_msgs::Odometry::ConstPtr& voData)
     pcl::toROSMsg(*tempCloud2, depthCloud2);
     depthCloud2.header.frame_id = "camera2";
     depthCloud2.header.stamp = voData->header.stamp;
-    depthCloudPubPointer->publish(depthCloud2);
+    depthCloudPub.publish(depthCloud2);
   }
 
   timeRec = time;
@@ -173,6 +181,7 @@ void voDataHandler(const nav_msgs::Odometry::ConstPtr& voData)
 
 void syncCloudHandler(const sensor_msgs::PointCloud2ConstPtr& syncCloud2)
 {
+    // 每5帧跳过一次
   if (startCount < startSkipNum) {
     startCount++;
     return;
@@ -191,16 +200,19 @@ void syncCloudHandler(const sensor_msgs::PointCloud2ConstPtr& syncCloud2)
 
   double scale = 0;
   int voPreInd = keepVoDataNum - 1;
-  if (voDataInd >= 0) {
+  if (voDataInd >= 0) // 储存了两帧之前的T
+  {
+      // 找到缓存数组内距离时间time后面的一个索引voRegInd
     while (voDataTime[voRegInd] <= time && voRegInd != voDataInd) {
       voRegInd = (voRegInd + 1) % keepVoDataNum;
     }
-
+    // 距离time最近的前一个索引voPreInd
     voPreInd = (voRegInd + keepVoDataNum - 1) % keepVoDataNum;
     double voTimePre = voDataTime[voPreInd];
     double voTimeReg = voDataTime[voRegInd];
 
-    if (voTimeReg - voTimePre < 0.5) {
+    if (voTimeReg - voTimePre < 0.5)
+    {
       double scale =  (voTimeReg - time) / (voTimeReg - voTimePre);
       if (scale > 1) {
         scale = 1;
@@ -210,6 +222,7 @@ void syncCloudHandler(const sensor_msgs::PointCloud2ConstPtr& syncCloud2)
     }
   }
 
+  // 这里是插值？？？scale 是比例 根据时间插值
   double rx2 = voRx[voRegInd] * scale;
   double ry2 = voRy[voRegInd] * scale;
   double rz2 = voRz[voRegInd] * scale;
@@ -228,25 +241,30 @@ void syncCloudHandler(const sensor_msgs::PointCloud2ConstPtr& syncCloud2)
   pcl::PointXYZI point;
   double x1, y1, z1, x2, y2, z2;
   int syncCloudNum = syncCloud->points.size();
-  for (int i = 0; i < syncCloudNum; i++) {
+  for (int i = 0; i < syncCloudNum; i++)
+  {
     point.x = syncCloud->points[i].x;
     point.y = syncCloud->points[i].y;
     point.z = syncCloud->points[i].z;
     point.intensity = timeLasted;
 
+    // 点point绕y轴旋转ry2
     x1 = cosry2 * point.x - sinry2 * point.z;
     y1 = point.y;
     z1 = sinry2 * point.x + cosry2 * point.z;
 
+    // 绕x轴旋转rx2
     x2 = x1;
     y2 = cosrx2 * y1 + sinrx2 * z1;
     z2 = -sinrx2 * y1 + cosrx2 * z1;
 
+    // 绕z轴旋转rz2,然后平移(tx2,ty2,tz2)
     point.x = cosrz2 * x2 + sinrz2 * y2 - tx2;
     point.y = -sinrz2 * x2 + cosrz2 * y2 - ty2;
     point.z = z2 - tz2;
 
-    if (voDataInd >= 0) {
+    if (voDataInd >= 0)
+    {
       int voAftInd = (voRegInd + 1) % keepVoDataNum;
       while (voAftInd != (voDataInd + 1) % keepVoDataNum) {
         double rx = voRx[voAftInd];
@@ -297,7 +315,7 @@ int main(int argc, char** argv)
   ros::Subscriber syncCloudSub = nh.subscribe<sensor_msgs::PointCloud2>
                                  ("/sync_scan_cloud_filtered", 5, syncCloudHandler);
 
-  ros::Publisher depthCloudPub = nh.advertise<sensor_msgs::PointCloud2> ("/depth_cloud", 5);
+  depthCloudPub = nh.advertise<sensor_msgs::PointCloud2> ("/depth_cloud", 5);
   depthCloudPubPointer = &depthCloudPub;
 
   ros::spin();

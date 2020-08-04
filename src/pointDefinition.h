@@ -10,11 +10,13 @@
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/kdtree/kdtree_flann.h>
 
+// 定义新的点云类型
 struct ImagePoint {
      float u, v;
      int ind;
 };
 
+//  定义新类型里元素包括u,v,ind
 POINT_CLOUD_REGISTER_POINT_STRUCT (ImagePoint,
                                    (float, u, u)
                                    (float, v, v)
